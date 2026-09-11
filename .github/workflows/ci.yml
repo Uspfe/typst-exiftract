@@ -41,5 +41,13 @@ jobs:
       - name: Test the package
         run: make test-typst
 
+      - name: Test the staged package through @preview
+        run: make test-package
+
       - name: Build the example
         run: make example
+
+      - name: Check spelling
+        uses: crate-ci/typos@master
+        with:
+          files: . --exclude dist/**

@@ -1,13 +1,11 @@
 // A small report built from an image's Exif metadata.
-//
-//   typst compile --root .. examples/metadata.typ
 
 #import "/lib.typ": read-exif
 
 #set page(width: 15cm, height: auto, margin: 1.5cm)
 #set text(size: 10pt)
 
-#let photo = read("/tests/assets/sample.jpg", encoding: none)
+#let photo = read("photo.jpg", encoding: none)
 #let fields = read-exif(photo)
 
 // read-exif hands over native values; how they read is still up to the

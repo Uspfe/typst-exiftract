@@ -28,6 +28,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         splice_jpeg_app1(&pixels, &edge_case_block()?),
     )?;
 
+    // The example document ships its own copy, so that it is self-contained
+    // both in this repository and in the published package.
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+    fs::create_dir_all(&examples)?;
+    fs::write(
+        examples.join("photo.jpg"),
+        splice_jpeg_app1(&pixels, &exif_block()?),
+    )?;
+
     println!("wrote fixtures to {}", out.display());
     Ok(())
 }

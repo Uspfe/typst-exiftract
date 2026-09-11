@@ -116,7 +116,7 @@
 // 0/0 is how Exif spells "unknown".
 #assert(float.is-nan(value-of(edge, "ExposureTime")))
 
-// Unparseable, blank and impossible dates stay strings rather than panicking.
+// Unparsable, blank and impossible dates stay strings rather than panicking.
 #assert.eq(value-of(edge, "DateTimeOriginal"), "    :  :     :  :  ")
 #assert.eq(value-of(edge, "DateTime"), "2024:02:30 10:00:00") // February has no 30th
 #assert.eq(value-of(edge, "GPSDateStamp"), "not a date")

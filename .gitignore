@@ -1,3 +1,4 @@
 /plugin/target/
+/dist/
 *.pdf
 *.png.tmp

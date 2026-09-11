@@ -1,18 +1,12 @@
 [package]
-name = "exif"
+name = "exiftract"
 version = "0.1.0"
 entrypoint = "lib.typ"
-authors = ["uspfe"]
-license = "MIT"
-description = "Read Exif metadata from images, through a WebAssembly plugin."
-repository = "https://github.com/uspfe/typst-exif"
-keywords = ["exif", "metadata", "image", "photo", "camera"]
-categories = ["utility"]
+authors = ["Uspfe <@Uspfe>"]
+license = "MIT AND BSD-2-Clause"
+description = "Read Exif metadata from images."
+repository = "https://github.com/Uspfe/typst-exif"
+keywords = ["exif", "metadata", "image", "photo", "camera", "jpeg"]
+categories = ["integration", "utility"]
 compiler = "0.15.0"
-exclude = [
-  ".github",
-  "Makefile",
-  "examples",
-  "plugin",
-  "tests",
-]
+exclude = ["/examples/"]
