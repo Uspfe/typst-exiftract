@@ -9,9 +9,11 @@ CLI and in CI.
 ```typst
 #import "@preview/exif:0.1.0": read-exif
 
-#let data = read-exif(read("photo.jpg", encoding: none))
+#let fields = read-exif(read("photo.jpg", encoding: none))
 
-Shot on #data.display.Model at #data.display.ExposureTime, f/#data.tags.FNumber.
+#for field in fields [
+  / #field.tag: #repr(field.value)
+]
 ```
 
 Requires Typst 0.15 or later.
@@ -35,20 +37,30 @@ read-exif(
   data,
   default: auto,
   max-values: 64,
-  max-display: 256,
   lenient: true,
-) -> dictionary
+) -> array
 ```
 
-The package exposes this one function.
+The package exposes this one function. It returns the Exif fields in the order
+the file stores them, one dictionary each:
+
+```typst
+(
+  tag: "ExposureTime",  // tag name, or e.g. "exif-0x9999" if unknown
+  ifd: "exif",          // primary, thumbnail, exif, gps or interop
+  number: 33434,        // numeric tag id
+  type: "rational",     // Exif type of the value
+  count: 1,             // number of elements, before truncation
+  value: (1, 200),      // the value as the file stores it
+)
+```
 
 | Argument | Type | Meaning |
 | --- | --- | --- |
 | `data` | `bytes` | The raw image file, e.g. `read("photo.jpg", encoding: none)`. |
 | `default` | any | Returned when the image has no readable Exif block. Left at `auto`, that case panics instead. |
 | `max-values` | `int` | How many elements of a multi-valued field to keep. |
-| `max-display` | `int` | How many characters of a `display` string to keep. |
-| `lenient` | `bool` | Keep what could be parsed from a damaged Exif block instead of failing. |
+| `lenient` | `bool` | Keep what could be parsed from a damaged Exif block instead of treating the damage as an error. |
 
 JPEG, TIFF (including TIFF-based raw formats), PNG, WebP and HEIF/HEIC/AVIF
 containers are understood.
@@ -57,57 +69,61 @@ Typst resolves relative paths against the file they appear in, so pass the
 bytes rather than a path — `read-exif("photo.jpg")` would look for the file
 next to `lib.typ` and is rejected with a hint.
 
-### What you get back
+### Values
+
+Values come back as the file holds them, with no interpretation: integers stay
+integers, ASCII stays a string, a rational stays a `(numerator, denominator)`
+pair, and `UNDEFINED` stays an array of byte values. `type` says which of the
+twelve Exif types it was.
 
 ```typst
-(
-  format: "jpeg",            // container the data was found in
-  little-endian: true,       // byte order of the Exif block
-  count: 19,                 // number of fields
-  tags: (Make: "Typst", ExposureTime: 0.005, ...),
-  display: (Make: "Typst", ExposureTime: "1/200 s", ...),
-  ifds: (primary: (...), exif: (...), gps: (...), thumbnail: (...)),
-  fields: ((tag: "Make", ifd: "primary", ...), ...),
-  warnings: (),              // non-fatal problems, when `lenient` is on
-)
+"Canon"       // ascii
+1             // short   — Orientation
+(1, 200)      // rational — ExposureTime, exactly as stored
 ```
 
-`tags` is the flat, machine-readable view: strings stay strings, integers stay
-integers, and rationals such as `ExposureTime` become floats. `display` holds
-the same fields rendered for a reader — `"1/200 s"`, `"f/2.8"`, `"72 pixels
-per inch"`, `"row 0 at top and column 0 at left"` — with units and enumerated
-values spelled out. Use `tags` to compute, `display` to typeset.
-
-Both are keyed by the Exif tag name (`Make`, `DateTimeOriginal`,
-`GPSLatitude`, …). Tags the parser does not know are keyed by context and
-number instead, like `tiff-0x9999`. When the primary image and the embedded
-thumbnail both carry a field, the primary one wins; `ifds` keeps them apart.
-
-`fields` is the complete, ordered list, one dictionary per field:
-
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `tag` | `str` | Tag name, the key used in `tags`. |
-| `ifd` | `str` | `"primary"`, `"thumbnail"`, `"exif"`, `"gps"` or `"interop"`. |
-| `number` | `int` | Numeric tag id. |
-| `type` | `str` | Exif type: `"ascii"`, `"short"`, `"rational"`, `"undefined"`, … |
-| `count` | `int` | Number of elements, before any truncation. |
-| `value` | any | Same value as in `tags`. |
-| `display` | `str` | Same string as in `display`. |
-| `description` | `str` | Human-readable name, absent for unknown tags. |
-| `truncated` | `bool` | Only present, and `true`, when `max-values` dropped elements. |
-
-Single-element fields — nearly all of them — are unwrapped to a bare value;
-genuinely multi-valued ones stay arrays:
+Nothing is rounded on the way out, so `ExposureTime` is `(1, 200)`, not
+`0.005`. Divide when you want the number:
 
 ```typst
-#data.tags.Make          // "Typst"
-#data.tags.GPSLatitude   // (48.0, 8.0, 41.23)
+#let (num, denom) = field.value
+#(num / denom)
 ```
 
-`count` tells you the real length either way. `max-values` exists because
-fields like `MakerNote` and `UserComment` can run to tens of kilobytes of raw
-bytes; raise it if you need them in full.
+Fields with a single element — nearly all of them — are unwrapped to a bare
+value; genuinely multi-valued ones stay arrays:
+
+```typst
+#by-tag.Make          // "Canon"
+#by-tag.GPSLatitude   // ((48, 1), (8, 1), (4123, 100))
+```
+
+`count` is the true number of elements either way, and stays correct when
+`max-values` truncated the array. That limit exists because fields like
+`MakerNote` and `UserComment` can run to tens of kilobytes of raw bytes; raise
+it if you need them in full.
+
+### Looking a tag up
+
+The result is a plain array, so use the array methods:
+
+```typst
+#let fields = read-exif(read("photo.jpg", encoding: none))
+
+#fields.find(f => f.tag == "Model").value
+#fields.filter(f => f.ifd == "gps")
+```
+
+For repeated lookups, build a dictionary once:
+
+```typst
+#let by-tag = fields.map(f => (f.tag, f.value)).to-dict()
+#by-tag.at("Model", default: "unknown camera")
+```
+
+Tags the parser does not know are keyed by context and number instead, like
+`tiff-0x9999`. The primary image and its embedded thumbnail can both carry the
+same tag; they stay separate entries, told apart by `ifd`.
 
 ### Images without Exif
 
@@ -121,18 +137,17 @@ By default a missing or unreadable Exif block is an error:
 Pass `default` to handle it in the document instead:
 
 ```typst
-#let data = read-exif(read(path, encoding: none), default: none)
-#if data == none [No metadata.] else [Shot on #data.display.Model.]
+#let fields = read-exif(read(path, encoding: none), default: ())
+#if fields == () [No metadata.]
 ```
 
 ### Dates
 
-`tags.DateTimeOriginal` is the raw Exif string, `"2024:05:17 09:30:00"`;
-`display.DateTimeOriginal` normalises it to `"2024-05-17 09:30:00"`. To get a
+`DateTimeOriginal` is the raw Exif string, `"2024:05:17 09:30:00"`. To get a
 `datetime`:
 
 ```typst
-#let (date, time) = data.tags.DateTimeOriginal.split(" ")
+#let (date, time) = by-tag.DateTimeOriginal.split(" ")
 #let (y, mo, d) = date.split(":").map(int)
 #let (h, mi, s) = time.split(":").map(int)
 #datetime(year: y, month: mo, day: d, hour: h, minute: mi, second: s)
@@ -141,7 +156,8 @@ Pass `default` to handle it in the document instead:
 ### Example
 
 [`examples/metadata.typ`](examples/metadata.typ) builds a small report — the
-photo, a summary table and every field it found.
+photo, a summary table and every field it found — including one way to render
+rationals as fractions.
 
 ## Building from source
 

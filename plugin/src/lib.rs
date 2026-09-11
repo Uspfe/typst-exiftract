@@ -3,7 +3,7 @@
 
 use std::io::Cursor;
 
-use exif::{Context, Field, In, Reader, Value};
+use exif::{Context, Field, Reader, Value};
 use serde_json::{json, Map, Value as Json};
 #[cfg(target_arch = "wasm32")]
 use wasm_minimal_protocol::wasm_func;
@@ -15,8 +15,6 @@ wasm_minimal_protocol::initiate_protocol!();
 struct Options {
     /// Maximum number of elements kept for multi-valued fields.
     max_values: usize,
-    /// Maximum number of characters kept for `display` strings.
-    max_display: usize,
     /// Keep whatever could be parsed when the Exif block is damaged.
     lenient: bool,
 }
@@ -25,7 +23,6 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             max_values: 64,
-            max_display: 256,
             lenient: true,
         }
     }
@@ -40,9 +37,6 @@ impl Options {
         if let Some(n) = map.get("max_values").and_then(Json::as_u64) {
             opts.max_values = n as usize;
         }
-        if let Some(n) = map.get("max_display").and_then(Json::as_u64) {
-            opts.max_display = n as usize;
-        }
         if let Some(b) = map.get("lenient").and_then(Json::as_bool) {
             opts.lenient = b;
         }
@@ -53,143 +47,45 @@ impl Options {
 /// The single entry point exposed to Typst.
 ///
 /// `data` is the raw image file, `options` a JSON object (may be empty).
-/// The answer is always valid JSON; failures are reported in the `ok` and
-/// `error` members rather than through the protocol's error channel, so that
-/// the Typst side can decide whether a missing Exif block is fatal.
+/// The answer is an envelope — `{"ok": true, "fields": [...]}` or
+/// `{"ok": false, "error": "..."}` — rather than a protocol-level error, so
+/// that the Typst side can decide whether a missing Exif block is fatal.
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
 pub fn read_exif(data: &[u8], options: &[u8]) -> Vec<u8> {
     let opts = Options::parse(options);
     let json = match read(data, &opts) {
-        Ok(value) => value,
-        Err(error) => json!({
-            "ok": false,
-            "error": error,
-            "format": sniff(data),
-        }),
+        Ok(fields) => json!({ "ok": true, "fields": fields }),
+        Err(error) => json!({ "ok": false, "error": error }),
     };
     serde_json::to_vec(&json).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":{}}}", Json::from(e.to_string())).into_bytes()
     })
 }
 
-fn read(data: &[u8], opts: &Options) -> Result<Json, String> {
+/// Parses the Exif block and describes every field in it, in file order.
+fn read(data: &[u8], opts: &Options) -> Result<Vec<Json>, String> {
     let mut reader = Reader::new();
     reader.continue_on_error(opts.lenient);
 
-    let mut warnings = Vec::new();
     let exif = reader
         .read_from_container(&mut Cursor::new(data))
-        .or_else(|e| {
-            e.distill_partial_result(|errors| {
-                warnings.extend(errors.iter().map(|e| e.to_string()));
-            })
-        })
+        .or_else(|e| e.distill_partial_result(|_| ()))
         .map_err(|e| e.to_string())?;
 
-    let mut fields = Vec::new();
-    let mut tags = Map::new();
-    let mut display = Map::new();
-    let mut ifds: Map<String, Json> = Map::new();
-
-    // Two passes so that a field of the primary image always wins over the
-    // same field of the embedded thumbnail in the flat `tags` map.
-    let ordered = exif
+    Ok(exif
         .fields()
-        .filter(|f| f.ifd_num == In::PRIMARY)
-        .chain(exif.fields().filter(|f| f.ifd_num != In::PRIMARY));
-
-    for field in ordered {
-        let name = tag_name(field);
-        let group = group_name(field);
-        let (value, kind, count, truncated) = encode_value(&field.value, opts.max_values);
-        let shown = truncate(display_string(field, &exif), opts.max_display);
-
-        let mut record = Map::new();
-        record.insert("tag".into(), name.clone().into());
-        record.insert("ifd".into(), group.clone().into());
-        record.insert("number".into(), field.tag.number().into());
-        record.insert("type".into(), kind.into());
-        record.insert("count".into(), count.into());
-        record.insert("value".into(), value.clone());
-        record.insert("display".into(), shown.clone().into());
-        if let Some(desc) = field.tag.description() {
-            record.insert("description".into(), desc.into());
-        }
-        if truncated {
-            record.insert("truncated".into(), true.into());
-        }
-        fields.push(Json::Object(record));
-
-        tags.entry(name.clone()).or_insert_with(|| value.clone());
-        display
-            .entry(name.clone())
-            .or_insert_with(|| shown.clone().into());
-        match ifds
-            .entry(group)
-            .or_insert_with(|| Json::Object(Map::new()))
-        {
-            Json::Object(map) => {
-                map.entry(name).or_insert(value);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    Ok(json!({
-        "ok": true,
-        "format": sniff(data),
-        "little-endian": exif.little_endian(),
-        "count": fields.len(),
-        "fields": fields,
-        "tags": tags,
-        "display": display,
-        "ifds": ifds,
-        "warnings": warnings,
-    }))
-}
-
-/// The human-readable rendering of a field.
-///
-/// kamadak-exif quotes and escapes plain ASCII values, which reads badly in a
-/// document. When a field got that default rendering we hand back the bare
-/// text instead; fields with a dedicated formatter (units, enumerations) keep
-/// the library's rendering.
-fn display_string(field: &Field, exif: &exif::Exif) -> String {
-    let shown = field.display_value().with_unit(exif).to_string();
-    let Value::Ascii(parts) = &field.value else {
-        return shown;
-    };
-    if shown == default_ascii_display(parts) {
-        let texts: Vec<_> = parts
-            .iter()
-            .map(|p| String::from_utf8_lossy(p).into_owned())
-            .collect();
-        return texts.join(", ");
-    }
-    shown
-}
-
-/// Reproduces kamadak-exif's default rendering of an ASCII value.
-fn default_ascii_display(parts: &[Vec<u8>]) -> String {
-    let mut out = String::new();
-    for (i, part) in parts.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        out.push('"');
-        for &c in part {
-            match c {
-                b'\\' | b'"' => {
-                    out.push('\\');
-                    out.push(c as char);
-                }
-                0x20..=0x7e => out.push(c as char),
-                _ => out.push_str(&format!("\\x{c:02x}")),
-            }
-        }
-        out.push('"');
-    }
-    out
+        .map(|field| {
+            let (value, kind, count) = encode_value(&field.value, opts.max_values);
+            let mut record = Map::new();
+            record.insert("tag".into(), tag_name(field).into());
+            record.insert("ifd".into(), ifd_name(field).into());
+            record.insert("number".into(), field.tag.number().into());
+            record.insert("type".into(), kind.into());
+            record.insert("count".into(), count.into());
+            record.insert("value".into(), value);
+            Json::Object(record)
+        })
+        .collect())
 }
 
 /// A stable, human-readable key for a field.
@@ -214,9 +110,9 @@ fn context_name(context: Context) -> &'static str {
     }
 }
 
-/// The bucket a field is filed under in the `ifds` member: the TIFF IFD it
-/// lives in, or the sub-IFD that gives it its meaning.
-fn group_name(field: &Field) -> String {
+/// The image directory a field belongs to: the TIFF IFD it lives in, or the
+/// sub-IFD that gives it its meaning.
+fn ifd_name(field: &Field) -> String {
     let index = field.ifd_num.index();
     match (field.tag.context(), index) {
         (Context::Tiff, 0) => "primary".into(),
@@ -227,112 +123,85 @@ fn group_name(field: &Field) -> String {
     }
 }
 
-/// Converts an Exif value into JSON.
+/// Converts an Exif value into JSON, as close to what the file holds as the
+/// format allows: integers stay integers, rationals stay `[numerator,
+/// denominator]` pairs, `UNDEFINED` stays a list of byte values.
 ///
-/// Single-element vectors — by far the common case — are unwrapped into a
-/// bare scalar; the element count stays available in the `count` member.
-/// Returns the value, its Exif type name, its untruncated element count and
-/// whether elements were dropped to honour `max`.
-fn encode_value(value: &Value, max: usize) -> (Json, &'static str, usize, bool) {
-    fn pack<T, F>(items: &[T], max: usize, f: F) -> (Json, usize, bool)
+/// Single-element fields — nearly all of them — are unwrapped to a bare
+/// value. Returns the value, the Exif type name and the untruncated element
+/// count.
+fn encode_value(value: &Value, max: usize) -> (Json, &'static str, usize) {
+    fn pack<T, F>(items: &[T], max: usize, f: F) -> (Json, usize)
     where
         F: Fn(&T) -> Json,
     {
         let count = items.len();
-        let kept = count.min(max);
         match count {
-            0 => (Json::Null, 0, false),
-            1 => (f(&items[0]), 1, false),
+            0 => (Json::Null, 0),
+            1 => (f(&items[0]), 1),
             _ => (
-                Json::Array(items[..kept].iter().map(f).collect()),
+                Json::Array(items[..count.min(max)].iter().map(f).collect()),
                 count,
-                kept < count,
             ),
         }
     }
 
+    /// JSON has no NaN or infinity; the Exif float types are unused in
+    /// practice, but a hand-rolled file can still contain one.
     fn number(x: f64) -> Json {
         Json::from(x).as_f64().map_or(Json::Null, Json::from)
     }
 
-    let (json, kind, count, truncated) = match value {
+    let (json, kind, count) = match value {
         Value::Byte(v) => {
-            let (j, c, t) = pack(v, max, |x| (*x).into());
-            (j, "byte", c, t)
+            let (j, c) = pack(v, max, |x| (*x).into());
+            (j, "byte", c)
         }
         Value::Ascii(v) => {
-            let (j, c, t) = pack(v, max, |x| String::from_utf8_lossy(x).into_owned().into());
-            (j, "ascii", c, t)
+            let (j, c) = pack(v, max, |x| String::from_utf8_lossy(x).into_owned().into());
+            (j, "ascii", c)
         }
         Value::Short(v) => {
-            let (j, c, t) = pack(v, max, |x| (*x).into());
-            (j, "short", c, t)
+            let (j, c) = pack(v, max, |x| (*x).into());
+            (j, "short", c)
         }
         Value::Long(v) => {
-            let (j, c, t) = pack(v, max, |x| (*x).into());
-            (j, "long", c, t)
+            let (j, c) = pack(v, max, |x| (*x).into());
+            (j, "long", c)
         }
         Value::Rational(v) => {
-            let (j, c, t) = pack(v, max, |x| number(x.to_f64()));
-            (j, "rational", c, t)
+            let (j, c) = pack(v, max, |x| json!([x.num, x.denom]));
+            (j, "rational", c)
         }
         Value::SByte(v) => {
-            let (j, c, t) = pack(v, max, |x| (*x).into());
-            (j, "sbyte", c, t)
+            let (j, c) = pack(v, max, |x| (*x).into());
+            (j, "sbyte", c)
         }
         Value::Undefined(v, _) => {
-            let (j, c, t) = pack(v, max, |x| (*x).into());
-            (j, "undefined", c, t)
+            let (j, c) = pack(v, max, |x| (*x).into());
+            (j, "undefined", c)
         }
         Value::SShort(v) => {
-            let (j, c, t) = pack(v, max, |x| (*x).into());
-            (j, "sshort", c, t)
+            let (j, c) = pack(v, max, |x| (*x).into());
+            (j, "sshort", c)
         }
         Value::SLong(v) => {
-            let (j, c, t) = pack(v, max, |x| (*x).into());
-            (j, "slong", c, t)
+            let (j, c) = pack(v, max, |x| (*x).into());
+            (j, "slong", c)
         }
         Value::SRational(v) => {
-            let (j, c, t) = pack(v, max, |x| number(x.to_f64()));
-            (j, "srational", c, t)
+            let (j, c) = pack(v, max, |x| json!([x.num, x.denom]));
+            (j, "srational", c)
         }
         Value::Float(v) => {
-            let (j, c, t) = pack(v, max, |x| number(*x as f64));
-            (j, "float", c, t)
+            let (j, c) = pack(v, max, |x| number(*x as f64));
+            (j, "float", c)
         }
         Value::Double(v) => {
-            let (j, c, t) = pack(v, max, |x| number(*x));
-            (j, "double", c, t)
+            let (j, c) = pack(v, max, |x| number(*x));
+            (j, "double", c)
         }
-        Value::Unknown(_, count, _) => (Json::Null, "unknown", *count as usize, false),
+        Value::Unknown(_, count, _) => (Json::Null, "unknown", *count as usize),
     };
-    (json, kind, count, truncated)
-}
-
-fn truncate(mut text: String, max: usize) -> String {
-    if text.chars().count() > max {
-        let end = text.char_indices().nth(max).map_or(text.len(), |(i, _)| i);
-        text.truncate(end);
-        text.push('…');
-    }
-    text
-}
-
-/// Best-effort container detection, reported back for diagnostics.
-fn sniff(data: &[u8]) -> &'static str {
-    const TIFF_LE: &[u8] = b"II*\0";
-    const TIFF_BE: &[u8] = b"MM\0*";
-    if data.starts_with(&[0xff, 0xd8]) {
-        "jpeg"
-    } else if data.starts_with(TIFF_LE) || data.starts_with(TIFF_BE) {
-        "tiff"
-    } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        "png"
-    } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
-        "webp"
-    } else if data.get(4..8) == Some(b"ftyp") {
-        "heif"
-    } else {
-        "unknown"
-    }
+    (json, kind, count)
 }

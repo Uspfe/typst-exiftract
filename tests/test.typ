@@ -8,97 +8,80 @@
 #let png = read("/tests/assets/sample.png", encoding: none)
 #let plain = read("/tests/assets/no-exif.jpg", encoding: none)
 
-// --- the shape of the returned dictionary ---------------------------------
+#let fields = read-exif(jpeg)
+#let field-named(name) = fields.find(f => f.tag == name)
+#let by-tag = fields.map(f => (f.tag, f.value)).to-dict()
 
-#let data = read-exif(jpeg)
+// --- the shape of the result -----------------------------------------------
 
-#assert.eq(type(data), dictionary)
+#assert.eq(type(fields), array)
+#assert.eq(fields.len(), 19)
 #assert.eq(
-  data.keys().sorted(),
-  ("count", "display", "fields", "format", "ifds", "little-endian", "tags", "warnings"),
+  fields.first().keys().sorted(),
+  ("count", "ifd", "number", "tag", "type", "value"),
 )
-#assert.eq(data.format, "jpeg")
-#assert.eq(data.at("little-endian"), true)
-#assert.eq(data.count, data.fields.len())
-#assert.eq(data.warnings, ())
 
-// --- flat tag lookup -------------------------------------------------------
+// Fields come in file order: the primary IFD, then the Exif and GPS sub-IFDs.
+#assert.eq(
+  fields.map(f => f.ifd).dedup(),
+  ("primary", "exif", "gps"),
+)
 
-#assert.eq(data.tags.Make, "Typst")
-#assert.eq(data.tags.Model, "Exif Fixture Camera")
-#assert.eq(data.tags.DateTimeOriginal, "2024:05:17 09:30:00")
-#assert.eq(data.tags.Orientation, 1)
-#assert.eq(data.tags.PixelXDimension, 16)
-#assert.eq(type(data.tags.Make), str)
-#assert.eq(type(data.tags.Orientation), int)
+// --- values are what the file holds ----------------------------------------
 
-// Rationals arrive as floats; the fraction survives in `display`.
-#assert.eq(data.tags.ExposureTime, 1 / 200)
-#assert.eq(data.tags.FNumber, 2.8)
-#assert.eq(data.display.ExposureTime, "1/200 s")
-#assert.eq(data.display.FNumber, "f/2.8")
+#assert.eq(by-tag.Make, "Typst")
+#assert.eq(by-tag.Model, "Exif Fixture Camera")
+#assert.eq(by-tag.DateTimeOriginal, "2024:05:17 09:30:00")
+#assert.eq(by-tag.Orientation, 1)
+#assert.eq(by-tag.PixelXDimension, 16)
+#assert.eq(type(by-tag.Make), str)
+#assert.eq(type(by-tag.Orientation), int)
 
-// Enumerated values are spelled out in `display`.
-#assert.eq(data.display.Orientation, "row 0 at top and column 0 at left")
-#assert.eq(data.display.ResolutionUnit, "inch")
+// Rationals keep numerator and denominator, so nothing is rounded away.
+#assert.eq(by-tag.ExposureTime, (1, 200))
+#assert.eq(by-tag.FNumber, (28, 10))
+#assert.eq(by-tag.XResolution, (72, 1))
 
 // --- multi-valued fields ---------------------------------------------------
 
-#assert.eq(data.tags.GPSLatitude, (48.0, 8.0, 41.23))
-#assert.eq(data.tags.GPSLatitudeRef, "N")
-#assert.eq(data.display.GPSLatitude, "48 deg 8 min 41.23 sec N")
+#assert.eq(by-tag.GPSLatitude, ((48, 1), (8, 1), (4123, 100)))
+#assert.eq(by-tag.GPSLatitudeRef, "N")
+#assert.eq(field-named("GPSLatitude").count, 3)
 
 // --- per-field records -----------------------------------------------------
 
-#let make = data.fields.find(f => f.tag == "Make")
-#assert.eq(
-  make.keys().sorted(),
-  ("count", "description", "display", "ifd", "number", "tag", "type", "value"),
-)
+#let make = field-named("Make")
 #assert.eq(make.ifd, "primary")
 #assert.eq(make.type, "ascii")
 #assert.eq(make.count, 1)
 #assert.eq(make.number, 271)
 #assert.eq(make.value, "Typst")
 
-#let latitude = data.fields.find(f => f.tag == "GPSLatitude")
-#assert.eq(latitude.ifd, "gps")
-#assert.eq(latitude.count, 3)
-
-// --- grouping by IFD -------------------------------------------------------
-
-#assert.eq(data.ifds.keys().sorted(), ("exif", "gps", "primary"))
-#assert.eq(data.ifds.primary.Make, "Typst")
-#assert.eq(data.ifds.exif.DateTimeOriginal, "2024:05:17 09:30:00")
-#assert.eq(data.ifds.gps.GPSLongitudeRef, "E")
-#assert("Make" not in data.ifds.exif)
+#assert.eq(field-named("GPSLatitude").ifd, "gps")
+#assert.eq(field-named("GPSLatitude").type, "rational")
+#assert.eq(field-named("DateTimeOriginal").ifd, "exif")
+#assert.eq(field-named("Orientation").type, "short")
 
 // --- other containers ------------------------------------------------------
 
-#let from-png = read-exif(png)
-#assert.eq(from-png.format, "png")
-#assert.eq(from-png.tags.Make, "Typst")
-#assert.eq(from-png.tags, data.tags)
+#assert.eq(read-exif(png), fields)
 
 // --- images without Exif ---------------------------------------------------
 
 #assert.eq(read-exif(plain, default: none), none)
-#assert.eq(read-exif(plain, default: (tags: (:))), (tags: (:)))
+#assert.eq(read-exif(plain, default: ()), ())
 #assert.eq(read-exif(bytes("neither jpeg nor tiff"), default: none), none)
 
 // --- limits ----------------------------------------------------------------
 
-#let capped = read-exif(jpeg, max-values: 2, max-display: 4)
-#let latitude = capped.fields.find(f => f.tag == "GPSLatitude")
-#assert.eq(latitude.value, (48.0, 8.0))
-#assert.eq(latitude.count, 3)
-#assert.eq(latitude.truncated, true)
-#assert.eq(capped.display.Model, "Exif…")
+#let capped = read-exif(jpeg, max-values: 2).find(f => f.tag == "GPSLatitude")
+#assert.eq(capped.value, ((48, 1), (8, 1)))
+#assert.eq(capped.count, 3)
 
-// `max-values: 0` keeps scalars (they are not vectors from the reader's point
-// of view) but empties every genuinely multi-valued field.
-#let none-kept = read-exif(jpeg, max-values: 0)
-#assert.eq(none-kept.tags.Make, "Typst")
-#assert.eq(none-kept.tags.GPSLatitude, ())
+// `max-values: 0` keeps scalars — they are not vectors from the reader's
+// point of view — but empties every genuinely multi-valued field.
+#let none-kept = read-exif(jpeg, max-values: 0).map(f => (f.tag, f.value)).to-dict()
+#assert.eq(none-kept.Make, "Typst")
+#assert.eq(none-kept.GPSLatitude, ())
 
 All Typst tests passed.

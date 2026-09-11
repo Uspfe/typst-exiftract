@@ -9,93 +9,102 @@ fn parse(name: &str, options: &str) -> Json {
     serde_json::from_slice(&read_exif(&data, options.as_bytes())).expect("plugin returns JSON")
 }
 
+fn fields(name: &str) -> Vec<Json> {
+    let out = parse(name, "");
+    assert_eq!(out["ok"], true, "{}", out["error"]);
+    out["fields"]
+        .as_array()
+        .expect("fields is an array")
+        .clone()
+}
+
+fn field(name: &str, tag: &str) -> Json {
+    fields(name)
+        .into_iter()
+        .find(|f| f["tag"] == tag)
+        .unwrap_or_else(|| panic!("no {tag} field in {name}"))
+}
+
 #[test]
 fn reads_the_jpeg_fixture() {
-    let out = parse("sample.jpg", "");
-    assert_eq!(out["ok"], true);
-    assert_eq!(out["format"], "jpeg");
-    assert_eq!(out["tags"]["Make"], "Typst");
-    assert_eq!(out["tags"]["Model"], "Exif Fixture Camera");
-    assert_eq!(out["tags"]["Orientation"], 1);
-    assert_eq!(out["tags"]["PixelXDimension"], 16);
-    assert_eq!(out["warnings"].as_array().unwrap().len(), 0);
-    assert_eq!(out["count"], 19);
+    let fields = fields("sample.jpg");
+    assert_eq!(fields.len(), 19);
+    assert_eq!(field("sample.jpg", "Make")["value"], "Typst");
+    assert_eq!(field("sample.jpg", "Model")["value"], "Exif Fixture Camera");
+    assert_eq!(field("sample.jpg", "Orientation")["value"], 1);
+    assert_eq!(field("sample.jpg", "PixelXDimension")["value"], 16);
 }
 
 #[test]
 fn reads_the_png_fixture() {
-    let out = parse("sample.png", "");
-    assert_eq!(out["ok"], true);
-    assert_eq!(out["format"], "png");
-    assert_eq!(out["tags"]["Make"], "Typst");
+    assert_eq!(fields("sample.png"), fields("sample.jpg"));
 }
 
 #[test]
-fn rationals_become_numbers_and_keep_their_fraction_in_display() {
-    let out = parse("sample.jpg", "");
-    assert_eq!(out["tags"]["ExposureTime"], 1.0 / 200.0);
-    assert_eq!(out["display"]["ExposureTime"], "1/200 s");
-    assert_eq!(out["tags"]["FNumber"], 2.8);
+fn rationals_keep_numerator_and_denominator() {
+    assert_eq!(
+        field("sample.jpg", "ExposureTime")["value"],
+        json(&[1, 200])
+    );
+    assert_eq!(field("sample.jpg", "FNumber")["value"], json(&[28, 10]));
 }
 
 #[test]
 fn multi_valued_fields_stay_arrays() {
-    let out = parse("sample.jpg", "");
-    let latitude = out["tags"]["GPSLatitude"]
-        .as_array()
-        .expect("three rationals");
-    assert_eq!(latitude.len(), 3);
-    assert_eq!(latitude[0], 48.0);
-    assert_eq!(out["tags"]["GPSLatitudeRef"], "N");
+    let latitude = field("sample.jpg", "GPSLatitude");
+    assert_eq!(latitude["count"], 3);
+    assert_eq!(
+        latitude["value"],
+        serde_json::json!([[48, 1], [8, 1], [4123, 100]])
+    );
+    assert_eq!(field("sample.jpg", "GPSLatitudeRef")["value"], "N");
 }
 
 #[test]
 fn fields_carry_their_ifd_and_type() {
-    let out = parse("sample.jpg", "");
-    let fields = out["fields"].as_array().unwrap();
-    let make = fields.iter().find(|f| f["tag"] == "Make").unwrap();
+    let make = field("sample.jpg", "Make");
+    let mut keys: Vec<_> = make.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, ["count", "ifd", "number", "tag", "type", "value"]);
     assert_eq!(make["ifd"], "primary");
     assert_eq!(make["type"], "ascii");
     assert_eq!(make["count"], 1);
-    assert!(make["description"].is_string());
+    assert_eq!(make["number"], 271);
 
-    let gps = fields.iter().find(|f| f["tag"] == "GPSLatitude").unwrap();
-    assert_eq!(gps["ifd"], "gps");
-    assert_eq!(gps["count"], 3);
+    assert_eq!(field("sample.jpg", "GPSLatitude")["ifd"], "gps");
+    assert_eq!(field("sample.jpg", "DateTimeOriginal")["ifd"], "exif");
+    assert_eq!(field("sample.jpg", "Orientation")["type"], "short");
+}
 
-    assert_eq!(out["ifds"]["gps"]["GPSLongitudeRef"], "E");
-    assert_eq!(
-        out["ifds"]["exif"]["DateTimeOriginal"],
-        "2024:05:17 09:30:00"
-    );
+#[test]
+fn fields_come_in_file_order() {
+    let order: Vec<_> = fields("sample.jpg")
+        .iter()
+        .map(|f| f["ifd"].as_str().unwrap().to_owned())
+        .collect();
+    let mut deduped = order.clone();
+    deduped.dedup();
+    assert_eq!(deduped, ["primary", "exif", "gps"]);
 }
 
 #[test]
 fn max_values_truncates_long_fields() {
     let out = parse("sample.jpg", r#"{"max_values": 2}"#);
-    let gps = out["fields"]
+    let latitude = out["fields"]
         .as_array()
         .unwrap()
         .iter()
         .find(|f| f["tag"] == "GPSLatitude")
         .unwrap()
         .clone();
-    assert_eq!(gps["value"].as_array().unwrap().len(), 2);
-    assert_eq!(gps["count"], 3);
-    assert_eq!(gps["truncated"], true);
-}
-
-#[test]
-fn max_display_truncates_long_strings() {
-    let out = parse("sample.jpg", r#"{"max_display": 5}"#);
-    assert_eq!(out["display"]["Model"], "Exif …");
+    assert_eq!(latitude["value"], serde_json::json!([[48, 1], [8, 1]]));
+    assert_eq!(latitude["count"], 3, "the real length stays available");
 }
 
 #[test]
 fn an_image_without_exif_reports_an_error() {
     let out = parse("no-exif.jpg", "");
     assert_eq!(out["ok"], false);
-    assert_eq!(out["format"], "jpeg");
     assert!(out["error"].as_str().unwrap().contains("No Exif data"));
 }
 
@@ -103,7 +112,6 @@ fn an_image_without_exif_reports_an_error() {
 fn garbage_input_reports_an_error_instead_of_panicking() {
     let out: Json = serde_json::from_slice(&read_exif(b"not an image at all", b"")).unwrap();
     assert_eq!(out["ok"], false);
-    assert_eq!(out["format"], "unknown");
     assert!(out["error"].is_string());
 }
 
@@ -111,4 +119,8 @@ fn garbage_input_reports_an_error_instead_of_panicking() {
 fn empty_input_reports_an_error() {
     let out: Json = serde_json::from_slice(&read_exif(b"", b"")).unwrap();
     assert_eq!(out["ok"], false);
+}
+
+fn json(values: &[i64]) -> Json {
+    Json::Array(values.iter().map(|v| (*v).into()).collect())
 }
