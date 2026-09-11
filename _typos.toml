@@ -1,0 +1,3 @@
+# Shared by `typos` locally and the CI step, so both check the same files.
+[files]
+extend-exclude = ["dist/", "plugin/target/"]

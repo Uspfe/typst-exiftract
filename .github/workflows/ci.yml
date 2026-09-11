@@ -48,6 +48,4 @@ jobs:
         run: make example
 
       - name: Check spelling
-        uses: crate-ci/typos@master
-        with:
-          files: . --exclude dist/**
+        uses: crate-ci/typos@v1.50.1
