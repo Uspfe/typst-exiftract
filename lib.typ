@@ -3,7 +3,9 @@
 // The parsing happens in a WebAssembly plugin built from `plugin/`, which
 // reads the image's Exif block and hands back JSON.
 
-#import "interpret.typ": interpret
+// Kept private: interpretation is reached through `return-raw`, not
+// imported separately.
+#import "interpret.typ": interpret as _interpret
 
 #let _plugin = plugin("exif.wasm")
 
@@ -18,15 +20,20 @@
 ///   number: 33434,        // numeric tag id
 ///   type: "rational",     // Exif type of the value
 ///   count: 1,             // number of elements, before truncation
-///   value: (1, 200),      // the value as the file stores it
+///   value: 0.005,         // the value, as a Typst type
+///   unit: "s",            // its unit, or none
 /// )
 /// ```
 ///
 /// - data (bytes): The raw image file, for instance
 ///   `read("photo.jpg", encoding: none)`. JPEG, TIFF, PNG, WebP and
 ///   HEIF/HEIC/AVIF containers are understood.
+/// - return-raw (bool): Hand back what the file holds instead of interpreting
+///   it: rationals stay `(numerator, denominator)` pairs, dates stay strings,
+///   `UNDEFINED` stays a list of byte values, and no `unit` is added.
 /// - default (any): What to return when the image carries no readable Exif
-///   metadata. Left at `auto`, that case panics instead.
+///   metadata. Left at `auto`, that case panics instead. Returned as given,
+///   never interpreted.
 /// - max-values (int): How many elements of a multi-valued field to keep.
 ///   Guards against fields such as `MakerNote`, which can be tens of
 ///   kilobytes. The untruncated length stays available as `count`.
@@ -36,6 +43,7 @@
 /// -> array
 #let read-exif(
   data,
+  return-raw: false,
   default: auto,
   max-values: 64,
   lenient: true,
@@ -53,6 +61,9 @@
   if type(lenient) != bool {
     panic("lenient must be a boolean")
   }
+  if type(return-raw) != bool {
+    panic("return-raw must be a boolean")
+  }
 
   let options = bytes(json.encode((
     max_values: max-values,
@@ -68,5 +79,5 @@
     return default
   }
 
-  result.fields
+  if return-raw { result.fields } else { _interpret(result.fields) }
 }

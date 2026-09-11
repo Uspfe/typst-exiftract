@@ -1,4 +1,4 @@
-// Typst-side test suite. Run with:
+// Typst-side test suite for the raw fields. Run with:
 //   typst compile --root . --format pdf tests/test.typ /dev/null
 // Every assertion that fails aborts the compilation with a message.
 
@@ -8,7 +8,7 @@
 #let png = read("/tests/assets/sample.png", encoding: none)
 #let plain = read("/tests/assets/no-exif.jpg", encoding: none)
 
-#let fields = read-exif(jpeg)
+#let fields = read-exif(jpeg, return-raw: true)
 #let field-named(name) = fields.find(f => f.tag == name)
 #let by-tag = fields.map(f => (f.tag, f.value)).to-dict()
 
@@ -20,6 +20,9 @@
   fields.first().keys().sorted(),
   ("count", "ifd", "number", "tag", "type", "value"),
 )
+
+// Raw fields carry no `unit`; that belongs to the interpreted form.
+#assert(fields.all(f => "unit" not in f))
 
 // Fields come in file order: the primary IFD, then the Exif and GPS sub-IFDs.
 #assert.eq(
@@ -64,23 +67,24 @@
 
 // --- other containers ------------------------------------------------------
 
-#assert.eq(read-exif(png), fields)
+#assert.eq(read-exif(png, return-raw: true), fields)
 
 // --- images without Exif ---------------------------------------------------
 
-#assert.eq(read-exif(plain, default: none), none)
-#assert.eq(read-exif(plain, default: ()), ())
-#assert.eq(read-exif(bytes("neither jpeg nor tiff"), default: none), none)
+#assert.eq(read-exif(plain, return-raw: true, default: none), none)
+#assert.eq(read-exif(plain, return-raw: true, default: ()), ())
+#assert.eq(read-exif(bytes("neither jpeg nor tiff"), return-raw: true, default: none), none)
 
 // --- limits ----------------------------------------------------------------
 
-#let capped = read-exif(jpeg, max-values: 2).find(f => f.tag == "GPSLatitude")
+#let capped = read-exif(jpeg, return-raw: true, max-values: 2).find(f => f.tag == "GPSLatitude")
 #assert.eq(capped.value, ((48, 1), (8, 1)))
 #assert.eq(capped.count, 3)
 
 // `max-values: 0` keeps scalars — they are not vectors from the reader's
 // point of view — but empties every genuinely multi-valued field.
-#let none-kept = read-exif(jpeg, max-values: 0).map(f => (f.tag, f.value)).to-dict()
+#let uncapped = read-exif(jpeg, return-raw: true, max-values: 0)
+#let none-kept = uncapped.map(f => (f.tag, f.value)).to-dict()
 #assert.eq(none-kept.Make, "Typst")
 #assert.eq(none-kept.GPSLatitude, ())
 

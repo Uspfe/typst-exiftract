@@ -2,15 +2,15 @@
 //
 //   typst compile --root .. examples/metadata.typ
 
-#import "/lib.typ": read-exif, interpret
+#import "/lib.typ": read-exif
 
 #set page(width: 15cm, height: auto, margin: 1.5cm)
 #set text(size: 10pt)
 
 #let photo = read("/tests/assets/sample.jpg", encoding: none)
-#let fields = interpret(read-exif(photo))
+#let fields = read-exif(photo)
 
-// Interpretation hands over native values; how they read is still up to the
+// read-exif hands over native values; how they read is still up to the
 // document. Datetimes get a format, numbers get their unit appended.
 #let show-value(field) = {
   let one(value) = if type(value) == datetime {

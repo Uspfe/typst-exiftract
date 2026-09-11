@@ -1,9 +1,14 @@
-// Tests for the interpreting layer. Run with:
+// Tests for the interpreted fields, which is what read-exif returns by
+// default. Run with:
 //   typst compile --root . --format pdf tests/test-interpret.typ /dev/null
 
-#import "/lib.typ": read-exif, interpret
+#import "/lib.typ": read-exif
 
-#let load(name) = interpret(read-exif(read("/tests/assets/" + name, encoding: none)))
+#let load(name) = read-exif(read("/tests/assets/" + name, encoding: none))
+#let load-with(name, ..options) = read-exif(
+  read("/tests/assets/" + name, encoding: none),
+  ..options,
+)
 #let fields = load("sample.jpg")
 #let edge = load("edge-cases.jpg")
 
@@ -21,7 +26,7 @@
 
 // Interpretation only rewrites `value` and adds `unit`; the rest describes the
 // file and is left as it was read.
-#let raw = read-exif(read("/tests/assets/sample.jpg", encoding: none))
+#let raw = read-exif(read("/tests/assets/sample.jpg", encoding: none), return-raw: true)
 #assert.eq(
   fields.map(f => (f.tag, f.ifd, f.number, f.type, f.count)),
   raw.map(f => (f.tag, f.ifd, f.number, f.type, f.count)),
@@ -120,12 +125,19 @@
 #assert.eq(value-of(edge, "tiff-0x9999"), 7)
 #assert.eq(unit-of(edge, "tiff-0x9999"), none)
 
-// --- composing with read-exif's own options --------------------------------
+// --- interoperating with the other options ---------------------------------
 
-#assert.eq(interpret(()), ())
-#assert.eq(
-  interpret(read-exif(read("/tests/assets/no-exif.jpg", encoding: none), default: ())),
-  (),
-)
+// `default` is handed back as given, never interpreted.
+#assert.eq(read-exif(read("/tests/assets/no-exif.jpg", encoding: none), default: ()), ())
+#assert.eq(read-exif(read("/tests/assets/no-exif.jpg", encoding: none), default: none), none)
+
+// Truncation happens before interpretation.
+#let capped = load-with("sample.jpg", max-values: 2)
+#assert.eq(value-of(capped, "GPSTimeStamp"), (7.0, 30.0))
+#assert.eq(get(capped, "GPSTimeStamp").count, 3)
+
+// `interpret` is not part of the public API; `return-raw` reaches the fields
+// it works from.
+#assert.eq(raw.find(f => f.tag == "ExposureTime").value, (1, 200))
 
 All interpret tests passed.

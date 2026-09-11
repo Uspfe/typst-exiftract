@@ -1,4 +1,5 @@
-// The interpreting layer on top of `read-exif`.
+// The interpreting layer, applied by `read-exif` unless `return-raw` is set.
+// Not part of the package's API: import `read-exif` from `lib.typ` instead.
 //
 // Exif stores everything as integers, rationals and byte strings. This turns
 // those into the Typst type that carries the same meaning, but only where the
@@ -185,14 +186,14 @@
   field + (value: value, unit: unit)
 }
 
-/// Interprets the fields returned by `read-exif`.
+/// Interprets raw fields.
 ///
 /// Every field keeps its `tag`, `ifd`, `number`, `type` and `count`; `value`
 /// becomes the Typst type that carries its meaning, and a `unit` member is
 /// added — a string such as `"mm"`, or `none` when the value is dimensionless
 /// or its type already says the unit.
 ///
-/// - fields (array): The fields from `read-exif`.
+/// - fields (array): Raw fields, as the plugin reports them.
 /// -> array
 #let interpret(fields) = {
   if type(fields) != array {
