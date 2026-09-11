@@ -1,0 +1,23 @@
+[package]
+name = "typst-exif-plugin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kamadak-exif = "0.6"
+wasm-minimal-protocol = "0.2"
+serde_json = "1"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  TYPST_VERSION: "0.15.0"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plugin
+
+      - name: Install Typst
+        run: |
+          curl -fsSL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz" \
+            | tar -xJ --strip-components=1 -C /usr/local/bin typst-x86_64-unknown-linux-musl/typst
+
+      - name: Check formatting
+        run: cd plugin && cargo fmt --check
+
+      - name: Lint
+        run: cd plugin && cargo clippy --all-targets -- -D warnings
+
+      - name: Test the plugin
+        run: cd plugin && cargo test
+
+      - name: Rebuild exif.wasm
+        run: make
+
+      - name: Test the package
+        run: make test-typst
+
+      - name: Build the example
+        run: make example
