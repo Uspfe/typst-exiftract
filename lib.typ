@@ -3,6 +3,8 @@
 // The parsing happens in a WebAssembly plugin built from `plugin/`, which
 // reads the image's Exif block and hands back JSON.
 
+#import "interpret.typ": interpret
+
 #let _plugin = plugin("exif.wasm")
 
 /// Reads the Exif metadata of an image.

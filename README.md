@@ -7,7 +7,7 @@ external tools, no shell-outs, and it works the same in the web app, in the
 CLI and in CI.
 
 ```typst
-#import "@preview/exif:0.1.0": read-exif
+#import "@preview/exif:0.1.0": read-exif, interpret
 
 #let fields = read-exif(read("photo.jpg", encoding: none))
 
@@ -15,6 +15,10 @@ CLI and in CI.
   / #field.tag: #repr(field.value)
 ]
 ```
+
+`read-exif` gives you what the file holds. `interpret` turns that into Typst's
+own types where the Exif specification lets it be done consistently — a
+`datetime`, an `angle` — and names the unit everywhere else.
 
 Requires Typst 0.15 or later.
 
@@ -41,7 +45,7 @@ read-exif(
 ) -> array
 ```
 
-The package exposes this one function. It returns the Exif fields in the order
+Returns the Exif fields in the order
 the file stores them, one dictionary each:
 
 ```typst
@@ -141,23 +145,115 @@ Pass `default` to handle it in the document instead:
 #if fields == () [No metadata.]
 ```
 
-### Dates
+### Dates and other Typst types
 
-`DateTimeOriginal` is the raw Exif string, `"2024:05:17 09:30:00"`. To get a
-`datetime`:
+`read-exif` hands back what the file holds, so `DateTimeOriginal` is the string
+`"2024:05:17 09:30:00"` and `ExposureTime` is `(1, 200)`. To get `datetime`,
+`angle` and friends, pass the fields through `interpret`.
+
+## `interpret`
 
 ```typst
-#let (date, time) = by-tag.DateTimeOriginal.split(" ")
-#let (y, mo, d) = date.split(":").map(int)
-#let (h, mi, s) = time.split(":").map(int)
-#datetime(year: y, month: mo, day: d, hour: h, minute: mi, second: s)
+interpret(fields) -> array
 ```
 
-### Example
+Takes the array from `read-exif` and returns it with each `value` turned into
+the Typst type that carries its meaning, plus a `unit` member. Everything else
+— `tag`, `ifd`, `number`, `type`, `count` — describes the file and is left as
+it was read.
+
+```typst
+#import "@preview/exif:0.1.0": read-exif, interpret
+
+#let fields = interpret(read-exif(read("photo.jpg", encoding: none)))
+#let taken = fields.find(f => f.tag == "DateTimeOriginal").value
+
+#taken.display("[day] [month repr:long] [year]")
+```
+
+| Exif | becomes | example |
+| --- | --- | --- |
+| rational | `float` | `ExposureTime` `(1, 200)` → `0.005` |
+| `DateTime`, `DateTimeOriginal`, `DateTimeDigitized` | `datetime` | `"2024:05:17 09:30:00"` |
+| `GPSDateStamp` | `datetime` (date only) | `"2024:05:17"` |
+| `GPSLatitude`, `GPSLongitude`, `GPSDestLatitude`, `GPSDestLongitude` | `angle` | `(48, 8, 41.23)` → `48.1448deg` |
+| `GPSTrack`, `GPSImgDirection`, `GPSDestBearing`, `CameraElevationAngle` | `angle` | `270.5deg` |
+| `UNDEFINED` | `bytes` | `ExifVersion` → `str(…)` is `"0232"` |
+| integers, ASCII | unchanged | they are already native |
+
+Coordinates are signed from their hemisphere: `GPSLatitudeRef` `"S"` and
+`GPSLongitudeRef` `"W"` give a negative angle, so the value goes straight into
+a map URL. `GPSAltitude` is negated when `GPSAltitudeRef` says below sea level.
+Those neighbouring fields are looked up within the same image directory, so a
+thumbnail's units never leak into the primary image's.
+
+### `unit`
+
+`unit` is a string, or `none` when the value is dimensionless or its Typst type
+already implies the unit:
+
+```typst
+#let field = fields.find(f => f.tag == "FocalLength")
+#field.value  // 35.0
+#field.unit   // "mm"
+```
+
+The units come from the Exif specification. Some are fixed by tag — `"s"`,
+`"mm"`, `"m"`, `"EV"`, `"pixels"`, `"hPa"` — and some are named by a
+neighbouring field, which `interpret` resolves for you:
+
+| Tag | unit from | example |
+| --- | --- | --- |
+| `XResolution`, `YResolution` | `ResolutionUnit` | `"pixels per inch"` |
+| `FocalPlaneXResolution`, `FocalPlaneYResolution` | `FocalPlaneResolutionUnit` | `"pixels per cm"` |
+| `GPSSpeed` | `GPSSpeedRef` | `"km/h"` |
+| `GPSDestDistance` | `GPSDestDistanceRef` | `"nautical miles"` |
+
+### What it deliberately does not convert
+
+A conversion is only worth having if it holds for every file and every field of
+that kind. Three cases fail that test:
+
+**Lengths stay numbers.** Typst's `length` covers pt, mm, cm, in and em — but
+not metres, and `SubjectDistance` is in metres. Converting `FocalLength` to
+`35mm` while `SubjectDistance` had to stay a number would make the type of a
+"length" field depend on which length it is. A Typst `length` is also a layout
+dimension, not a physical quantity: `35mm` normalises to `99.21pt` and would
+happily be used as a page width. So every length is a `float` with its unit in
+`unit`.
+
+**`GPSTimeStamp` stays three numbers.** It holds hours, minutes and seconds as
+rationals, and the seconds are routinely fractional. Typst's `datetime` and
+`duration` both take whole seconds only, so either conversion would work on
+some files and round on others. It comes back as `(7.0, 30.0, 12.5)` with
+`unit: "h, min, s"`.
+
+**Enumerations stay numbers.** `Orientation` is `1`, not `"row 0 at top and
+column 0 at left"`; `Flash` is a bit field. Those are presentation, and a
+decoding table belongs above this layer, not inside it.
+
+### Values that do not convert cleanly
+
+Interpretation never fails on a damaged file:
+
+- `0/0`, which Exif uses for "unknown", becomes `float.nan` — test it with
+  `float.is-nan(value)` rather than `==`.
+- A date that does not parse, is blank, or does not exist — February 30th shows
+  up in real files — stays the string it was. Check with
+  `type(value) == datetime` before formatting.
+- Unknown tags pass through untouched, with `unit: none`.
+
+One thing to know about the datetimes: `GPSDateStamp` has no time of day, so
+`display()` with an `[hour]` in the format string will fail on it. `value.hour()
+== none` tells the two apart. Exif keeps sub-second digits and UTC offsets in
+their own fields (`SubSecTimeOriginal`, `OffsetTimeOriginal`); Typst's
+`datetime` cannot hold either, so they stay separate fields for you to apply.
+
+## Example
 
 [`examples/metadata.typ`](examples/metadata.typ) builds a small report — the
-photo, a summary table and every field it found — including one way to render
-rationals as fractions.
+photo, a summary table and every field it found — and shows one way to render
+interpreted values, units and all.
 
 ## Building from source
 
@@ -179,9 +275,10 @@ metadata under test is explicit and the repository stays small.
 | Path | |
 | --- | --- |
 | `lib.typ` | the Typst API |
+| `interpret.typ` | the interpreting layer, pure Typst |
 | `exif.wasm` | the compiled plugin |
 | `plugin/` | its Rust source and tests |
-| `tests/` | Typst test suite and generated fixtures |
+| `tests/` | Typst test suites and generated fixtures |
 | `examples/` | example document |
 
 ## License

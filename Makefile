@@ -18,6 +18,7 @@ test-rust:
 
 test-typst: exif.wasm
 	$(TYPST) compile --root . --format pdf tests/test.typ /dev/null
+	$(TYPST) compile --root . --format pdf tests/test-interpret.typ /dev/null
 
 fixtures:
 	cd plugin && cargo run --example mkfixtures

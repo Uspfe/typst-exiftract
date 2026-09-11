@@ -23,6 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         splice_jpeg_app1(&pixels, &exif_block()?),
     )?;
     fs::write(out.join("sample.png"), png_with_exif(&exif_block()?)?)?;
+    fs::write(
+        out.join("edge-cases.jpg"),
+        splice_jpeg_app1(&pixels, &edge_case_block()?),
+    )?;
 
     println!("wrote fixtures to {}", out.display());
     Ok(())
@@ -115,6 +119,142 @@ fn exif_block() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
                     denom: 100,
                 },
             ]),
+        },
+        Field {
+            tag: Tag::GPSAltitudeRef,
+            ifd_num: In::PRIMARY,
+            value: Value::Byte(vec![0]),
+        },
+        Field {
+            tag: Tag::GPSAltitude,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational {
+                num: 5204,
+                denom: 10,
+            }]),
+        },
+        ascii(Tag::GPSDateStamp, "2024:05:17"),
+        Field {
+            tag: Tag::GPSTimeStamp,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![
+                Rational { num: 7, denom: 1 },
+                Rational { num: 30, denom: 1 },
+                // Fractional seconds: the reason GPSTimeStamp stays numbers.
+                Rational {
+                    num: 125,
+                    denom: 10,
+                },
+            ]),
+        },
+        ascii(Tag::GPSImgDirectionRef, "T"),
+        Field {
+            tag: Tag::GPSImgDirection,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational {
+                num: 2705,
+                denom: 10,
+            }]),
+        },
+        ascii(Tag::GPSSpeedRef, "K"),
+        Field {
+            tag: Tag::GPSSpeed,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 12, denom: 1 }]),
+        },
+        Field {
+            tag: Tag::SubjectDistance,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 25, denom: 10 }]),
+        },
+        Field {
+            tag: Tag::ExifVersion,
+            ifd_num: In::PRIMARY,
+            value: Value::Undefined(b"0232".to_vec(), 0),
+        },
+    ];
+
+    let mut writer = Writer::new();
+    for field in &fields {
+        writer.push_field(field);
+    }
+    let mut buf = Cursor::new(Vec::new());
+    writer.write(&mut buf, true)?;
+    Ok(buf.into_inner())
+}
+
+/// Values that interpretation must leave alone or handle defensively: an
+/// unknown tag, a `0/0` rational, dates that do not parse or do not exist, a
+/// southern/western position, an altitude below sea level, and a second
+/// resolution unit in the thumbnail directory.
+fn edge_case_block() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let fields = vec![
+        Field {
+            tag: Tag(exif::Context::Tiff, 0x9999),
+            ifd_num: In::PRIMARY,
+            value: Value::Short(vec![7]),
+        },
+        Field {
+            tag: Tag::ExposureTime,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 0, denom: 0 }]),
+        },
+        // The blank value Exif uses for an unset date, and a date that the
+        // calendar does not have.
+        ascii(Tag::DateTimeOriginal, "    :  :     :  :  "),
+        ascii(Tag::DateTime, "2024:02:30 10:00:00"),
+        ascii(Tag::GPSDateStamp, "not a date"),
+        ascii(Tag::GPSLatitudeRef, "S"),
+        Field {
+            tag: Tag::GPSLatitude,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![
+                Rational { num: 33, denom: 1 },
+                Rational { num: 51, denom: 1 },
+                Rational { num: 24, denom: 1 },
+            ]),
+        },
+        ascii(Tag::GPSLongitudeRef, "W"),
+        Field {
+            tag: Tag::GPSLongitude,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![
+                Rational { num: 70, denom: 1 },
+                Rational { num: 39, denom: 1 },
+                Rational { num: 18, denom: 1 },
+            ]),
+        },
+        Field {
+            tag: Tag::GPSAltitudeRef,
+            ifd_num: In::PRIMARY,
+            value: Value::Byte(vec![1]),
+        },
+        Field {
+            tag: Tag::GPSAltitude,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 120, denom: 1 }]),
+        },
+        // Same tags in the thumbnail directory, with a different unit, so that
+        // neighbour lookups have to stay within one directory.
+        Field {
+            tag: Tag::XResolution,
+            ifd_num: In::THUMBNAIL,
+            value: Value::Rational(vec![Rational { num: 300, denom: 1 }]),
+        },
+        Field {
+            tag: Tag::ResolutionUnit,
+            ifd_num: In::THUMBNAIL,
+            value: Value::Short(vec![3]),
+        },
+        Field {
+            tag: Tag::XResolution,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 72, denom: 1 }]),
+        },
+        Field {
+            tag: Tag::ResolutionUnit,
+            ifd_num: In::PRIMARY,
+            value: Value::Short(vec![2]),
         },
     ];
 

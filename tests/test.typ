@@ -15,7 +15,7 @@
 // --- the shape of the result -----------------------------------------------
 
 #assert.eq(type(fields), array)
-#assert.eq(fields.len(), 19)
+#assert.eq(fields.len(), 29)
 #assert.eq(
   fields.first().keys().sorted(),
   ("count", "ifd", "number", "tag", "type", "value"),

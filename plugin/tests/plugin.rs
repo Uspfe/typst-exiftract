@@ -28,7 +28,7 @@ fn field(name: &str, tag: &str) -> Json {
 #[test]
 fn reads_the_jpeg_fixture() {
     let fields = fields("sample.jpg");
-    assert_eq!(fields.len(), 19);
+    assert_eq!(fields.len(), 29);
     assert_eq!(field("sample.jpg", "Make")["value"], "Typst");
     assert_eq!(field("sample.jpg", "Model")["value"], "Exif Fixture Camera");
     assert_eq!(field("sample.jpg", "Orientation")["value"], 1);
