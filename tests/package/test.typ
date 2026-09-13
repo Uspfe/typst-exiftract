@@ -8,14 +8,18 @@
 
 #let fields = read-exif(read("photo.jpg", encoding: none))
 
-// The README's opening example, verbatim.
-#let taken = fields.find(f => f.tag == "DateTimeOriginal").value
-#assert.eq(taken.display("[day] [month repr:long] [year]"), "17 May 2024")
-
-// A representative value of each interpreted type.
+// The README's opening snippet, with the outputs it claims.
 #let by-tag = fields.map(f => (f.tag, f.value)).to-dict()
-#assert.eq(by-tag.Make, "Typst")
+#assert.eq(by-tag.Model, "Exif Fixture Camera")
 #assert.eq(by-tag.ExposureTime, 0.005)
+#assert.eq(by-tag.DateTimeOriginal.display(), "2024-05-17 09:30:00")
+#assert.eq(calc.round(by-tag.GPSLatitude.deg(), digits: 4), 48.1448)
+
+// The claim that a dictionary keeps the last of two same-named fields.
+#assert.eq((("a", 1), ("a", 2)).to-dict(), (a: 2))
+
+// A representative value of each other interpreted type.
+#assert.eq(by-tag.Make, "Typst")
 #assert.eq(type(by-tag.GPSLatitude), angle)
 #assert.eq(str(by-tag.ExifVersion), "0232")
 #assert.eq(fields.find(f => f.tag == "FocalLength").unit, "mm")
