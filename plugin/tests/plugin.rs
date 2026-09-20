@@ -102,10 +102,10 @@ fn max_values_truncates_long_fields() {
 }
 
 #[test]
-fn an_image_without_exif_reports_an_error() {
+fn an_image_without_exif_reads_as_empty() {
     let out = parse("no-exif.jpg", "");
-    assert_eq!(out["ok"], false);
-    assert!(out["error"].as_str().unwrap().contains("No Exif data"));
+    assert_eq!(out["ok"], true, "{}", out["error"]);
+    assert_eq!(out["fields"], serde_json::json!([]));
 }
 
 #[test]
@@ -113,6 +113,13 @@ fn garbage_input_reports_an_error_instead_of_panicking() {
     let out: Json = serde_json::from_slice(&read_exif(b"not an image at all", b"")).unwrap();
     assert_eq!(out["ok"], false);
     assert!(out["error"].is_string());
+    assert!(
+        out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown image format"),
+        "bytes in no container stay an error, unlike an image without Exif"
+    );
 }
 
 #[test]

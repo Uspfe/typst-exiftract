@@ -71,9 +71,15 @@
 
 // --- images without Exif ---------------------------------------------------
 
-#assert.eq(read-exif(plain, return-raw: true, default: none), none)
-#assert.eq(read-exif(plain, return-raw: true, default: ()), ())
-#assert.eq(read-exif(bytes("neither jpeg nor tiff"), return-raw: true, default: none), none)
+// An image the reader understands that simply carries no Exif block is not a
+// failure: there is no metadata, and that is the answer. No `fallback` needed.
+#assert.eq(read-exif(plain, return-raw: true), ())
+#assert.eq(read-exif(plain), ())
+
+// Bytes in no container the reader knows are still an error, and `fallback`
+// is what stands in for the panic.
+#assert.eq(read-exif(bytes("neither jpeg nor tiff"), return-raw: true, fallback: none), none)
+#assert.eq(read-exif(bytes("neither jpeg nor tiff"), fallback: ()), ())
 
 // --- limits ----------------------------------------------------------------
 

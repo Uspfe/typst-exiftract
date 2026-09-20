@@ -29,9 +29,9 @@ Requires Typst 0.15.
 read-exif(
   data,
   return-raw: false,
-  default: auto,
+  fallback: auto,
   max-values: 64,
-  lenient: true,
+  keep-partial: true,
 ) -> array
 ```
 
@@ -53,9 +53,9 @@ Returns the fields in the order the file stores them, one dictionary each:
 | --- | --- | --- |
 | `data` | `bytes` | The image file: `read("photo.jpg", encoding: none)`. |
 | `return-raw` | `bool` | Skip interpretation, see [below](#return-raw). |
-| `default` | any | Returned when there is no readable Exif block. At `auto`, that case panics. Returned as given. |
+| `fallback` | any | Returned instead of failing when the file is not a readable image. At `auto`, that case panics. Returned as given. |
 | `max-values` | `int` | Elements kept per field. |
-| `lenient` | `bool` | Keep what parsed from a damaged block instead of erroring. |
+| `keep-partial` | `bool` | Keep the fields that parsed from a damaged block. At `false`, any damage is an error. |
 
 Reads JPEG, TIFF (including TIFF-based raw formats), PNG, WebP and
 HEIF/HEIC/AVIF.
@@ -167,19 +167,31 @@ its embedded thumbnail can carry the same tag; both are kept, told apart by
 
 ## No Exif data
 
-A missing or unreadable Exif block is an error by default:
+An image with no Exif block — a screenshot, an export that stripped its
+metadata — is not an error. There is no metadata, and `()` says so:
 
 ```typst
-#read-exif(read("screenshot.png", encoding: none))
-// error: could not read Exif metadata: No Exif data found in PNG
-```
-
-`default` handles it in the document instead:
-
-```typst
-#let fields = read-exif(read(path, encoding: none), default: ())
+#let fields = read-exif(read("screenshot.png", encoding: none))
 #if fields == () [No metadata.]
 ```
+
+A file that is not a readable image is a different matter, and does panic:
+
+```typst
+#read-exif(read("notes.pdf", encoding: none))
+// error: could not read Exif metadata: Unknown image format
+```
+
+So does an Exif block too damaged to salvage — a mangled header, say, which
+`keep-partial` cannot work around. Typst has no way to catch a panic, so
+`fallback` stands in for one when a stray file must not stop the document:
+
+```typst
+#let fields = read-exif(read(path, encoding: none), fallback: ())
+```
+
+Reach for it when the paths come from data you do not control. Left at `auto`,
+an unreadable file stays loud, which is usually what you want while writing.
 
 ## Example
 

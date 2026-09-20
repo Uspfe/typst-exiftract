@@ -25,28 +25,32 @@
 /// )
 /// ```
 ///
+/// An image that carries no Exif metadata is not an error: it yields `()`.
+///
 /// - data (bytes): The raw image file, for instance
 ///   `read("photo.jpg", encoding: none)`. JPEG, TIFF, PNG, WebP and
 ///   HEIF/HEIC/AVIF containers are understood.
 /// - return-raw (bool): Hand back what the file holds instead of interpreting
 ///   it: rationals stay `(numerator, denominator)` pairs, dates stay strings,
 ///   `UNDEFINED` stays a list of byte values, and no `unit` is added.
-/// - default (any): What to return when the image carries no readable Exif
-///   metadata. Left at `auto`, that case panics instead. Returned as given,
-///   never interpreted.
+/// - fallback (any): What to return instead of failing when the file cannot be
+///   read as an image at all — it is in no container the reader knows, or its
+///   Exif block is damaged past salvaging. Left at `auto`, that case panics.
+///   Returned as given, never interpreted. An image that merely has no Exif
+///   metadata yields `()` and never reaches this.
 /// - max-values (int): How many elements of a multi-valued field to keep.
 ///   Guards against fields such as `MakerNote`, which can be tens of
 ///   kilobytes. The untruncated length stays available as `count`.
-/// - lenient (bool): Keep whatever could be parsed from a damaged Exif
-///   block, instead of treating the damage as an error.
+/// - keep-partial (bool): Keep the fields that could be parsed from a damaged
+///   Exif block. At `false`, any damage is an error.
 ///
 /// -> array
 #let read-exif(
   data,
   return-raw: false,
-  default: auto,
+  fallback: auto,
   max-values: 64,
-  lenient: true,
+  keep-partial: true,
 ) = {
   if type(data) != bytes {
     panic(
@@ -58,8 +62,8 @@
   if type(max-values) != int or max-values < 0 {
     panic("max-values must be a non-negative integer")
   }
-  if type(lenient) != bool {
-    panic("lenient must be a boolean")
+  if type(keep-partial) != bool {
+    panic("keep-partial must be a boolean")
   }
   if type(return-raw) != bool {
     panic("return-raw must be a boolean")
@@ -67,16 +71,16 @@
 
   let options = bytes(json.encode((
     max_values: max-values,
-    lenient: lenient,
+    keep_partial: keep-partial,
   )))
 
   let result = json(_plugin.read_exif(data, options))
 
   if not result.ok {
-    if default == auto {
+    if fallback == auto {
       panic("could not read Exif metadata: " + result.error)
     }
-    return default
+    return fallback
   }
 
   if return-raw { result.fields } else { interpret(result.fields) }

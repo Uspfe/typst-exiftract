@@ -3,7 +3,7 @@
 
 use std::io::Cursor;
 
-use exif::{Context, Field, Reader, Value};
+use exif::{Context, Error, Field, Reader, Value};
 use serde_json::{json, Map, Value as Json};
 #[cfg(target_arch = "wasm32")]
 use wasm_minimal_protocol::wasm_func;
@@ -16,14 +16,14 @@ struct Options {
     /// Maximum number of elements kept for multi-valued fields.
     max_values: usize,
     /// Keep whatever could be parsed when the Exif block is damaged.
-    lenient: bool,
+    keep_partial: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
             max_values: 64,
-            lenient: true,
+            keep_partial: true,
         }
     }
 }
@@ -37,8 +37,8 @@ impl Options {
         if let Some(n) = map.get("max_values").and_then(Json::as_u64) {
             opts.max_values = n as usize;
         }
-        if let Some(b) = map.get("lenient").and_then(Json::as_bool) {
-            opts.lenient = b;
+        if let Some(b) = map.get("keep_partial").and_then(Json::as_bool) {
+            opts.keep_partial = b;
         }
         opts
     }
@@ -49,7 +49,8 @@ impl Options {
 /// `data` is the raw image file, `options` a JSON object (may be empty).
 /// The answer is an envelope — `{"ok": true, "fields": [...]}` or
 /// `{"ok": false, "error": "..."}` — rather than a protocol-level error, so
-/// that the Typst side can decide whether a missing Exif block is fatal.
+/// that the Typst side can decide what to do with a file it cannot read. An
+/// image without Exif metadata is an empty `fields`, not an error.
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
 pub fn read_exif(data: &[u8], options: &[u8]) -> Vec<u8> {
     let opts = Options::parse(options);
@@ -65,12 +66,20 @@ pub fn read_exif(data: &[u8], options: &[u8]) -> Vec<u8> {
 /// Parses the Exif block and describes every field in it, in file order.
 fn read(data: &[u8], opts: &Options) -> Result<Vec<Json>, String> {
     let mut reader = Reader::new();
-    reader.continue_on_error(opts.lenient);
+    reader.continue_on_error(opts.keep_partial);
 
-    let exif = reader
+    let exif = match reader
         .read_from_container(&mut Cursor::new(data))
         .or_else(|e| e.distill_partial_result(|_| ()))
-        .map_err(|e| e.to_string())?;
+    {
+        Ok(exif) => exif,
+        // A container the reader understands that carries no Exif block at
+        // all: the image has no metadata, which is an answer rather than a
+        // failure. Everything else — an unknown container, a damaged block
+        // that could not be salvaged — stays an error.
+        Err(Error::NotFound(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
 
     Ok(exif
         .fields()

@@ -127,9 +127,13 @@
 
 // --- interoperating with the other options ---------------------------------
 
-// `default` is handed back as given, never interpreted.
-#assert.eq(read-exif(read("/tests/assets/no-exif.jpg", encoding: none), default: ()), ())
-#assert.eq(read-exif(read("/tests/assets/no-exif.jpg", encoding: none), default: none), none)
+// An image without Exif metadata interprets to nothing, rather than panicking.
+#assert.eq(read-exif(read("/tests/assets/no-exif.jpg", encoding: none)), ())
+
+// `fallback` is handed back as given, never interpreted: these values would
+// not survive `interpret`, which expects field dictionaries.
+#assert.eq(read-exif(bytes("neither jpeg nor tiff"), fallback: none), none)
+#assert.eq(read-exif(bytes("neither jpeg nor tiff"), fallback: (1, 2)), (1, 2))
 
 // Truncation happens before interpretation.
 #let capped = load-with("sample.jpg", max-values: 2)
