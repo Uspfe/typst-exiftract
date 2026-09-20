@@ -212,4 +212,4 @@ The Typst sources are MIT, see [LICENSE](LICENSE).
 `MIT AND BSD-2-Clause`.
 
 [kamadak-exif]: https://github.com/kamadak/exif-rs
-[repo]: https://github.com/Uspfe/typst-exif
+[repo]: https://github.com/Uspfe/typst-exiftract
